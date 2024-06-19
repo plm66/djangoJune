@@ -1,0 +1,86 @@
+version: '3'
+
+services:
+    db:
+        image: postgres:14.4
+        volumes:
+            - postgres_data:/var/lib/postgresql/data/
+        ports:
+            - "5432:5432"
+        environment:
+            - POSTGRES_DB=django
+            - POSTGRES_USER=django
+            - POSTGRES_PASSWORD=django
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready -U django"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    web:
+        container_name: django_template
+        build:
+            context: .
+            dockerfile: Dockerfile
+        volumes:
+            - .:/app
+        ports:
+            - "8000:8000"
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_started
+        restart: on-failure:1
+        command: "python manage.py runserver_plus 0.0.0.0:8000 --cert-file .mock_certs/cert.pem --key-file .mock_certs/key.pem"
+        env_file:
+            -   .env
+
+    sass:
+        build:
+            context: .
+            dockerfile: source_scss/Dockerfile
+        volumes:
+            - .:/app
+        command: "npx sass source_scss:static --watch --no-source-map --style=compressed"
+
+    redis:
+        image: "redis:latest"
+        ports:
+            - "6379:6379"
+
+    celery:
+        user: "1000:1000"
+        build:
+            context: .
+            dockerfile: Dockerfile
+        command: "celery -A django_template worker --loglevel=info"
+        volumes:
+            - .:/app
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_started
+        env_file:
+            - .env
+
+
+    celery-beat:
+        container_name: django_celery_beat
+        build:
+            context: .
+            dockerfile: Dockerfile
+        command: "celery -A django_template beat -l INFO --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+        volumes:
+            - .:/app
+        depends_on:
+            db:
+                condition: service_healthy
+            redis:
+                condition: service_started
+        env_file:
+            - .env
+
+volumes:
+    postgres_data:

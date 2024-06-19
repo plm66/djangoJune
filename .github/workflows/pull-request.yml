@@ -1,0 +1,122 @@
+name: Pull Request Checks
+
+on: pull_request
+
+jobs:
+
+  run-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 'Checkout Github Action'
+        uses: actions/checkout@v2
+
+      - name: 'Build `docker-compose` Environment'
+        run: |
+          cp .env.example .env
+          docker-compose up -d
+
+      - name: 'Check Running Containers'
+        run: docker ps -a
+
+      - name: 'Run Python Unit Tests'
+        run: docker-compose run web pytest -n auto
+
+
+  run-linter:
+    name: Lint Code Base
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v2
+        with:
+          # Full git history is needed to get a proper list of changed files within `super-linter`
+          fetch-depth: 0
+
+      - name: Check for Modified Python Files
+        run: echo "template_py_diff=$(git diff --name-only --diff-filter=ACMRTUXB origin/$GITHUB_BASE_REF | grep  -E "(.py$)" | tr "\n" " ")" >> $GITHUB_ENV
+
+      - name: Setup Python Linter
+        if: ${{ env.template_py_diff != '' }}
+        run: |
+          python3 -m pip install flake8==7.0.0 black==24.2.0
+
+      - name: Run Black - Confirm files have been formatted using Black
+        if: ${{ env.template_py_diff != '' }}
+        run: python3 -m black ${{env.template_py_diff}} --check
+
+      - name: Run Python Linter
+        if: ${{ env.template_py_diff != '' }}
+        run: python3 -m flake8 ${{env.template_py_diff}} --ignore=E501,F405,W503
+
+  run-migration-check:
+    name: Check for Migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 'Checkout Github Action'
+        uses: actions/checkout@v2
+
+      - name: 'Build `docker-compose` Environment'
+        run: |
+          cp .env.example .env
+          docker-compose up -d
+
+      - name: 'Check Running Containers'
+        run: docker ps -a
+
+      - name: 'Check for Missing Migrations'
+        run: docker-compose run web python manage.py makemigrations --dry-run --check
+
+
+  run-pylint:
+    name: Pylint Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 'Checkout Github Action'
+        uses: actions/checkout@v2
+
+      - name: 'Build `docker-compose` Environment'
+        run: |
+          cp .env.example .env
+          docker-compose up -d
+
+      - name: 'Run Pylint'
+        run: docker-compose run web pylint django_template apps tests
+
+
+  run-codecov:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 'Checkout Github Action'
+        uses: actions/checkout@v2
+
+      - name: 'Build `docker-compose` Environment'
+        run: |
+          cp .env.example .env
+          docker-compose up -d
+
+      - name: 'Run Code Coverage'
+        run: docker-compose run web pytest -n auto --cov=apps --cov-report=json --cov-report=term-missing
+
+      - name: 'Check Coverage Percentage'
+        run: |
+          COVERAGE=$(jq '.totals.percent_covered' coverage.json)
+          if (( $(echo "$COVERAGE < 100" |bc -l) )); then
+            echo "Coverage is below 100%"
+            exit 1
+          fi
+
+      - name: 'Upload Code Coverage'
+        uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+          flags: unittests
+          files: coverage.json
